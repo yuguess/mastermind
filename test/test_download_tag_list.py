@@ -4,6 +4,7 @@ from tagrank.app.download_tag_list import (
     VideoLink,
     extract_videos,
     fetch_page_html_with_retry_SE,
+    merge_incremental_videos,
     page_url,
     parse_tag_ids,
     safe_filename,
@@ -111,3 +112,48 @@ def test_fetch_page_html_with_retry_retries_until_success(monkeypatch):
     )
     assert attempts == ["https://example.com"] * 3
     assert sleeps == [1, 1]
+
+
+def test_merge_incremental_videos_uses_code_as_id():
+    existing = [
+        VideoLink(
+            url="https://example.com/old-a",
+            code="aaa-001",
+            title="Old title",
+            image_description="Old image",
+            duration="1:00",
+        )
+    ]
+    new_videos = [
+        VideoLink(
+            url="https://example.com/new-a",
+            code="aaa-001",
+            title="New title",
+            image_description="",
+            duration="",
+        ),
+        VideoLink(
+            url="https://example.com/b",
+            code="bbb-002",
+            title="B title",
+            image_description="B image",
+            duration="2:00",
+        ),
+    ]
+
+    assert merge_incremental_videos(existing, new_videos) == [
+        VideoLink(
+            url="https://example.com/new-a",
+            code="aaa-001",
+            title="New title",
+            image_description="Old image",
+            duration="1:00",
+        ),
+        VideoLink(
+            url="https://example.com/b",
+            code="bbb-002",
+            title="B title",
+            image_description="B image",
+            duration="2:00",
+        ),
+    ]

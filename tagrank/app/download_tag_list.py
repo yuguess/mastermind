@@ -30,6 +30,7 @@ DEFAULT_PAGES = 2
 MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 3
 VIDEO_PATH_RE = re.compile(r"^/(?:dm\d+/)?en/[\w.-]+$", re.IGNORECASE)
+VIDEO_CSV_FIELDS = ("id", "url", "code", "title", "duration", "image_description")
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,9 +233,9 @@ def fetch_page_html_with_retry_SE(
         opt_html, opt_error = fetch_page_html_once_SE(url)
         if opt_html is not None:
             return opt_html, None
+        print(f"retry {attempt}/{max_retries}: {url}, err:{opt_error}")
         if not is_last_attempt(attempt, max_retries):
             retry_delay_SE(delay_seconds)
-        print(f"retry {attempt}/{max_retries}: {url}")
     return opt_html, opt_error
 
 
@@ -261,25 +262,77 @@ def safe_filename(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("_") or "tag"
 
 
+def row_value(row: dict[str, str], key: str) -> str:
+    opt_value = row.get(key)
+    return opt_value or ""
+
+
+def video_id(video: VideoLink) -> str:
+    return video.code or video.url
+
+
+def video_from_csv_row(row: dict[str, str]) -> VideoLink:
+    return VideoLink(
+        url=row_value(row, "url"),
+        code=row_value(row, "code") or row_value(row, "id"),
+        title=row_value(row, "title"),
+        duration=row_value(row, "duration"),
+        image_description=row_value(row, "image_description"),
+    )
+
+
+def read_existing_videos_SE(output_path: Path) -> list[VideoLink]:
+    if not output_path.exists():
+        return []
+    with output_path.open(newline="", encoding="utf-8") as file:
+        return [video_from_csv_row(row) for row in csv.DictReader(file)]
+
+
+def update_video(existing: VideoLink, new: VideoLink) -> VideoLink:
+    return VideoLink(
+        url=new.url or existing.url,
+        code=new.code or existing.code,
+        title=new.title or existing.title,
+        image_description=new.image_description or existing.image_description,
+        duration=new.duration or existing.duration,
+    )
+
+
+def merge_incremental_videos(existing: list[VideoLink], new_videos: list[VideoLink]) -> list[VideoLink]:
+    video_map = {video_id(video): video for video in existing}
+    new_ids = [video_id(video) for video in new_videos if video_id(video) not in video_map]
+    for video in new_videos:
+        current_id = video_id(video)
+        video_map[current_id] = (
+            update_video(video_map[current_id], video)
+            if current_id in video_map
+            else video
+        )
+    return [video_map[current_id] for current_id in [*map(video_id, existing), *new_ids]]
+
+
+def video_csv_row(video: VideoLink) -> dict[str, str]:
+    return {
+        "id": video_id(video),
+        "url": video.url,
+        "code": video.code,
+        "title": video.title,
+        "duration": video.duration,
+        "image_description": video.image_description,
+    }
+
+
 def write_video_csv_SE(output_dir: Path, tag: TagSource, videos: list[VideoLink]) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{safe_filename(tag.name)}.csv"
+    merged_videos = merge_incremental_videos(read_existing_videos_SE(output_path), videos)
     with output_path.open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(
             file,
-            fieldnames=("url", "code", "title", "duration", "image_description"),
+            fieldnames=VIDEO_CSV_FIELDS,
         )
         writer.writeheader()
-        writer.writerows(
-            {
-                "url": video.url,
-                "code": video.code,
-                "title": video.title,
-                "duration": video.duration,
-                "image_description": video.image_description,
-            }
-            for video in videos
-        )
+        writer.writerows(video_csv_row(video) for video in merged_videos)
     return output_path
 
 
