@@ -4,8 +4,10 @@ from tagrank.app.download_tag_list import (
     VideoLink,
     extract_videos,
     fetch_page_html_with_retry_SE,
+    fetch_tag_videos_SE,
     merge_incremental_videos,
     page_url,
+    page_numbers,
     parse_tag_ids,
     safe_filename,
     select_tag_sources,
@@ -19,6 +21,10 @@ def test_page_url_adds_page_query():
     assert page_url("https://example.com/en/genres/Foo", 3) == (
         "https://example.com/en/genres/Foo?page=3"
     )
+
+
+def test_page_numbers_starts_at_page_index():
+    assert list(page_numbers(3, 2)) == [3, 4]
 
 
 def test_extract_videos_deduplicates_video_links():
@@ -156,4 +162,48 @@ def test_merge_incremental_videos_uses_code_as_id():
             image_description="B image",
             duration="2:00",
         ),
+    ]
+
+
+def test_fetch_tag_videos_starts_at_page_index(monkeypatch):
+    calls = []
+    tag = TagSource(id=1, name="A", url="https://example.com/a")
+
+    def fake_fetch_page_videos_SE(tag_url, page_number):
+        calls.append((tag_url, page_number))
+        return [
+            VideoLink(
+                url=f"https://example.com/video-{page_number}",
+                code=f"code-{page_number}",
+                title="",
+                image_description="",
+                duration="",
+            )
+        ]
+
+    monkeypatch.setattr(
+        download_tag_list,
+        "fetch_page_videos_SE",
+        fake_fetch_page_videos_SE,
+    )
+
+    assert fetch_tag_videos_SE(tag, 3, 2) == [
+        VideoLink(
+            url="https://example.com/video-3",
+            code="code-3",
+            title="",
+            image_description="",
+            duration="",
+        ),
+        VideoLink(
+            url="https://example.com/video-4",
+            code="code-4",
+            title="",
+            image_description="",
+            duration="",
+        ),
+    ]
+    assert calls == [
+        ("https://example.com/a", 3),
+        ("https://example.com/a", 4),
     ]
