@@ -12,7 +12,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Iterable
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, unquote, urljoin, urlparse
+from urllib.parse import parse_qs, unquote, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 
@@ -25,6 +25,7 @@ DEFAULT_TAG_PAGES = (
 TAG_PATH_RE = re.compile(
     r"^/(?:dm\d+/)?(?:[a-z]{2}/)?genres?/([^/?#]+)/*$", re.IGNORECASE
 )
+GENRE_PAGE_RE = re.compile(r"^/(?:[a-z]{2}/)?genres?/*$", re.IGNORECASE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +127,42 @@ def extract_tags(page_html: str, page_url: str) -> list[Tag]:
     return sorted(tags.values(), key=lambda tag: tag.name.casefold())
 
 
+def parse_genre_page_anchor(href: str, page_url: str) -> tuple[int, str] | None:
+    absolute_url = urljoin(page_url, href)
+    parsed = urlparse(absolute_url)
+    if not GENRE_PAGE_RE.match(parsed.path):
+        return None
+
+    page_values = parse_qs(parsed.query).get("page")
+    if not page_values:
+        return 1, parsed._replace(fragment="").geturl()
+
+    try:
+        page_number = int(page_values[0])
+    except ValueError:
+        return None
+
+    if page_number < 1:
+        return None
+
+    return page_number, parsed._replace(fragment="").geturl()
+
+
+def extract_genre_page_urls(page_html: str, page_url: str) -> list[str]:
+    parser = AnchorParser()
+    parser.feed(page_html)
+
+    page_anchors = [
+        page_anchor
+        for href, _text in parser.anchors
+        if (page_anchor := parse_genre_page_anchor(href, page_url))
+    ]
+    pages = {page_number: url for page_number, url in page_anchors}
+
+    pages.setdefault(1, page_url)
+    return [pages[page] for page in sorted(pages)]
+
+
 def candidate_urls(base_url: str, paths: Iterable[str] = DEFAULT_TAG_PAGES) -> list[str]:
     base = base_url.rstrip("/") + "/"
     return [urljoin(base, path.lstrip("/")) for path in paths]
@@ -135,11 +172,30 @@ def download_tags(base_url: str, timeout: float) -> list[Tag]:
     errors: list[str] = []
     for url in candidate_urls(base_url):
         try:
-            tags = extract_tags(fetch_html(url, timeout), url)
+            first_page_html = fetch_html(url, timeout)
         except (HTTPError, URLError, TimeoutError, OSError) as exc:
             errors.append(f"{url}: {exc}")
             continue
 
+        page_urls = [
+            page_url for page_url in extract_genre_page_urls(first_page_html, url) if page_url != url
+        ]
+        page_tag_groups: list[list[Tag]] = []
+        for page_url in page_urls:
+            try:
+                page_tag_groups.append(extract_tags(fetch_html(page_url, timeout), page_url))
+            except (HTTPError, URLError, TimeoutError, OSError) as exc:
+                errors.append(f"{page_url}: {exc}")
+
+        tags_by_slug = {
+            tag.slug.lower(): tag
+            for tag in (
+                *extract_tags(first_page_html, url),
+                *(tag for page_tags in page_tag_groups for tag in page_tags),
+            )
+        }
+
+        tags = sorted(tags_by_slug.values(), key=lambda tag: tag.name.casefold())
         if tags:
             return tags
         errors.append(f"{url}: no tag links found")
