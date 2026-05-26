@@ -28,10 +28,10 @@
     {
       "id": "download_video_parts",
       "name": "下载组成视频的一部分",
-      "description": "从命令行参数读入视频id、分辨率和index起止范围, 通过查询video_playlist_exports目录下对应CSV下载分片, 下载时跳过失败分片并按index升序合并为ts文件",
+      "description": "从命令行参数读入视频id、分辨率、index起止范围、并发数和重试间隔, 通过查询video_playlist_exports目录下对应CSV下载分片, 下载失败分片最多重试5次, 范围下载时跳过失败分片并按index升序合并为ts文件, 合并完成后删除已合并的分片文件",
       "status": "implemented",
-      "evidence": "运行tagrank/app/download_video_parts.py --video-id jur-586 --resolution 360p --index-start 0 --index-end 2, 从data/video_playlist_exports/{id}/{分辨率}.csv读取referer和segment_url, 范围内失败分片会跳过, 成功分片合并到data/video/{id}/{分辨率}/{id}_{分辨率}_0_2.ts",
-      "testedAt": "2026-05-26T13:25:00Z"
+      "evidence": "运行tagrank/app/download_video_parts.py --video-id jur-586 --resolution 360p --index-start 0 --index-end 2 --concurrency 2 --retry-delay 1, 并发下载分片, 失败按attempt*retry_delay等待并最多重试5次, 成功分片合并到data/video/{id}/{分辨率}/{id}_{分辨率}_0_2.ts后删除分片文件",
+      "testedAt": "2026-05-26T14:00:00Z"
     }
   ]
 }
