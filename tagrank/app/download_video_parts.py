@@ -39,10 +39,10 @@ class VideoPart:
 
 def parse_args(opt_argv: Optional[Strs] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    # Locate one exported playlist row by video id, resolution, and part index.
     parser.add_argument("--video-id", required=True)
     parser.add_argument("--resolution", required=True)
-    parser.add_argument("--index", type=int, required=True)
+    parser.add_argument("--index-start", type=int, required=True)
+    parser.add_argument("--index-end", type=int, required=True)
     parser.add_argument("--playlist-dir", type=Path, default=DEFAULT_PLAYLIST_DIR)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
@@ -92,9 +92,19 @@ def read_video_parts_SE(csv_path: Path) -> list[VideoPart]:
     return [part for part in opt_parts if part is not None]
 
 
-def select_video_part(parts: list[VideoPart], index: int) -> Optional[VideoPart]:
-    matches = [part for part in parts if part.index == index]
-    return matches[0] if matches else None
+def index_range(index_start: int, index_end: int) -> range:
+    if index_start > index_end:
+        raise ValueError(f"index-start must be <= index-end: {index_start} > {index_end}")
+    return range(index_start, index_end + 1)
+
+
+def select_video_parts(parts: list[VideoPart], index_start: int, index_end: int) -> list[VideoPart]:
+    indexes = set(index_range(index_start, index_end))
+    part_map = {part.index: part for part in parts if part.index in indexes}
+    missing_indexes = [index for index in index_range(index_start, index_end) if index not in part_map]
+    if missing_indexes:
+        raise RuntimeError(f"parts not found: indexes={missing_indexes}")
+    return [part_map[index] for index in index_range(index_start, index_end)]
 
 
 def request_headers(referer: str) -> dict[str, str]:
@@ -163,29 +173,67 @@ def download_part_file_SE(part: VideoPart, output_path: Path, timeout: float) ->
     return output_path
 
 
-def download_video_part_SE(
+def try_download_part_file_SE(part: VideoPart, output_path: Path, timeout: float) -> Optional[Path]:
+    try:
+        return download_part_file_SE(part, output_path, timeout)
+    except Exception as exc:
+        print(f"skip part index={part.index}: {part.segment_url}, err:{exc}")
+        return None
+
+
+def merged_output_path(output_dir: Path, video_id: str, resolution: str, index_start: int, index_end: int) -> Path:
+    filename = "_".join(
+        [
+            safe_filename(video_id),
+            safe_filename(resolution),
+            str(index_start),
+            str(index_end),
+        ]
+    )
+    return output_dir_for_part(output_dir, video_id, resolution) / f"{filename}.ts"
+
+
+def merge_part_files_SE(part_paths: list[Path], output_path: Path) -> Path:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = temp_output_path(output_path)
+    with temp_path.open("wb") as output_file:
+        for part_path in part_paths:
+            with part_path.open("rb") as input_file:
+                copy_response_SE(input_file, output_file)
+    temp_path.replace(output_path)
+    return output_path
+
+
+def download_video_parts_SE(
     video_id: str,
     resolution: str,
-    index: int,
+    index_start: int,
+    index_end: int,
     playlist_dir: Path,
     output_dir: Path,
     timeout: float,
 ) -> Path:
     csv_path = playlist_csv_path(playlist_dir, video_id, resolution)
-    opt_part = select_video_part(read_video_parts_SE(csv_path), index)
-    if opt_part is None:
-        raise RuntimeError(f"part not found: video_id={video_id} resolution={resolution} index={index}")
-    output_path = output_path_for_part(output_dir, video_id, opt_part)
-    return download_part_file_SE(opt_part, output_path, timeout)
+    parts = select_video_parts(read_video_parts_SE(csv_path), index_start, index_end)
+    opt_part_paths = [
+        try_download_part_file_SE(part, output_path_for_part(output_dir, video_id, part), timeout)
+        for part in parts
+    ]
+    part_paths = [path for path in opt_part_paths if path is not None]
+    if not part_paths:
+        raise RuntimeError(f"no parts downloaded: video_id={video_id} resolution={resolution}")
+    output_path = merged_output_path(output_dir, video_id, resolution, index_start, index_end)
+    return merge_part_files_SE(part_paths, output_path)
 
 
 def main_SE(opt_argv: Optional[Strs] = None) -> int:
     args = parse_args(opt_argv)
     try:
-        output_path = download_video_part_SE(
+        output_path = download_video_parts_SE(
             args.video_id,
             args.resolution,
-            args.index,
+            args.index_start,
+            args.index_end,
             args.playlist_dir,
             args.output_dir,
             args.timeout,
@@ -193,7 +241,7 @@ def main_SE(opt_argv: Optional[Strs] = None) -> int:
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    print(f"saved video part to {output_path}")
+    print(f"saved video parts to {output_path}")
     return 0
 
 
