@@ -7,6 +7,7 @@ import csv
 import http.client
 import re
 import sys
+import time
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
@@ -26,6 +27,8 @@ DEFAULT_INPUT = PROJECT_ROOT / "data" / "tags.csv"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data" / "tag_list"
 DEFAULT_REFERER = "https://missav.ws/en/genres"
 DEFAULT_PAGES = 2
+MAX_RETRIES = 3
+RETRY_DELAY_SECONDS = 3
 VIDEO_PATH_RE = re.compile(r"^/(?:dm\d+/)?en/[\w.-]+$", re.IGNORECASE)
 
 
@@ -203,14 +206,45 @@ def extract_videos(page_html: str, page_url_value: str) -> list[VideoLink]:
     return deduplicate_videos(videos)
 
 
+def is_last_attempt(attempt: int, max_retries: int) -> bool:
+    return attempt >= max_retries
+
+
+def fetch_page_html_once_SE(url: str) -> tuple[OptStr, OptStr]:
+    try:
+        return fetch_html_with_referer_SE(url, DEFAULT_REFERER, 20), None
+    except (HTTPError, URLError, TimeoutError, OSError, http.client.IncompleteRead) as exc:
+        return None, str(exc)
+
+
+def retry_delay_SE(delay_seconds: int) -> None:
+    time.sleep(delay_seconds)
+
+
+def fetch_page_html_with_retry_SE(
+    url: str,
+    max_retries: int = MAX_RETRIES,
+    delay_seconds: int = RETRY_DELAY_SECONDS,
+) -> tuple[OptStr, OptStr]:
+    opt_html = None
+    opt_error = None
+    for attempt in range(1, max_retries + 1):
+        opt_html, opt_error = fetch_page_html_once_SE(url)
+        if opt_html is not None:
+            return opt_html, None
+        if not is_last_attempt(attempt, max_retries):
+            retry_delay_SE(delay_seconds)
+        print(f"retry {attempt}/{max_retries}: {url}")
+    return opt_html, opt_error
+
+
 def fetch_page_videos_SE(tag_url: str, page_number: int) -> list[VideoLink]:
     current_url = page_url(tag_url, page_number)
-    try:
-        page_html = fetch_html_with_referer_SE(current_url, DEFAULT_REFERER, 20)
-    except (HTTPError, URLError, TimeoutError, OSError, http.client.IncompleteRead) as exc:
-        print(f"ERR {current_url}: {exc}")
+    opt_page_html, opt_error = fetch_page_html_with_retry_SE(current_url)
+    if opt_page_html is None:
+        print(f"ERR {current_url}: {opt_error}")
         return []
-    return extract_videos(page_html, current_url)
+    return extract_videos(opt_page_html, current_url)
 
 
 def fetch_tag_videos_SE(tag: TagSource, pages: int) -> list[VideoLink]:

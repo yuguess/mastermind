@@ -14,8 +14,8 @@
       "name": "下载标签对应视频列表",
       "description": "从data/tags.csv读取标签,把对应地址视频地址存到对应标签名的csv文件中, 从命令行输入得到需要下载tag id, 多个tag id用逗号隔开",
       "status": "implemented",
-      "evidence": "运行tagrank/app/download_tag_list.py --tag-ids 1,2,3, 在data/tag_list目录中可以看到对应标签csv文件",
-      "testedAt": "2026-05-26T08:40:00Z"
+      "evidence": "运行tagrank/app/download_tag_list.py --tag-ids 1,2,3, 页面下载失败时会等待后重试, 最多尝试3次, 在data/tag_list目录中可以看到对应标签csv文件",
+      "testedAt": "2026-05-26T08:55:00Z"
     }
   ]
 }
