@@ -15,6 +15,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, unquote, urljoin, urlparse
 from urllib.request import Request, urlopen
 
+from tagrank.base_adt import OptStr, Strs
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BASE_URL = "https://missav.ws"
@@ -42,11 +44,11 @@ class AnchorParser(HTMLParser):
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self._opt_href: Optional[str] = None
+        self._opt_href: OptStr = None
         self._text_parts: list[str] = []
         self.anchors: list[tuple[str, str]] = []
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, OptStr]]) -> None:
         opt_href = dict(attrs).get("href") if tag.lower() == "a" else None
         if opt_href:
             self._opt_href = opt_href
@@ -64,7 +66,7 @@ class AnchorParser(HTMLParser):
             self._text_parts = []
 
 
-def decode_response(raw: bytes, opt_content_type: Optional[str]) -> str:
+def decode_response(raw: bytes, opt_content_type: OptStr) -> str:
     charset = "utf-8"
     if opt_content_type:
         opt_match = re.search(r"charset=([\w.-]+)", opt_content_type, flags=re.IGNORECASE)
@@ -73,7 +75,7 @@ def decode_response(raw: bytes, opt_content_type: Optional[str]) -> str:
     return raw.decode(charset, errors="replace")
 
 
-def fetch_html(url: str, timeout: float) -> str:
+def fetch_html_SE(url: str, timeout: float) -> str:
     request = Request(
         url,
         headers={
@@ -156,7 +158,7 @@ def parse_positive_int(value: str) -> Optional[int]:
     return number if number >= 1 else None
 
 
-def extract_genre_page_urls(page_html: str, page_url: str) -> list[str]:
+def extract_genre_page_urls(page_html: str, page_url: str) -> Strs:
     parser = AnchorParser()
     parser.feed(page_html)
 
@@ -171,14 +173,14 @@ def extract_genre_page_urls(page_html: str, page_url: str) -> list[str]:
     return [pages[page] for page in sorted(pages)]
 
 
-def candidate_urls(base_url: str, paths: Iterable[str] = DEFAULT_TAG_PAGES) -> list[str]:
+def candidate_urls(base_url: str, paths: Iterable[str] = DEFAULT_TAG_PAGES) -> Strs:
     base = base_url.rstrip("/") + "/"
     return [urljoin(base, path.lstrip("/")) for path in paths]
 
 
-def fetch_html_or_error(url: str, timeout: float) -> tuple[Optional[str], Optional[str]]:
+def fetch_html_or_error_SE(url: str, timeout: float) -> tuple[OptStr, OptStr]:
     try:
-        return fetch_html(url, timeout), None
+        return fetch_html_SE(url, timeout), None
     except (HTTPError, URLError, TimeoutError, OSError) as exc:
         return None, f"{url}: {exc}"
 
@@ -196,8 +198,8 @@ def deduplicate_tags(tags: Iterable[Tag]) -> list[Tag]:
     return sort_tags(keep_first_tag_by_slug(tag_items).values())
 
 
-def fetch_page_tags(page_url: str, timeout: float) -> tuple[list[Tag], Optional[str]]:
-    opt_html, opt_error = fetch_html_or_error(page_url, timeout)
+def fetch_page_tags_SE(page_url: str, timeout: float) -> tuple[list[Tag], OptStr]:
+    opt_html, opt_error = fetch_html_or_error_SE(page_url, timeout)
     return (
         (extract_tags(opt_html, page_url), None)
         if opt_html is not None
@@ -205,17 +207,17 @@ def fetch_page_tags(page_url: str, timeout: float) -> tuple[list[Tag], Optional[
     )
 
 
-def fetch_paginated_tags(
+def fetch_paginated_tags_SE(
     first_page_html: str,
     first_page_url: str,
     timeout: float,
-) -> tuple[list[Tag], list[str]]:
+) -> tuple[list[Tag], Strs]:
     page_urls = [
         page_url
         for page_url in extract_genre_page_urls(first_page_html, first_page_url)
         if page_url != first_page_url
     ]
-    page_results = [fetch_page_tags(page_url, timeout) for page_url in page_urls]
+    page_results = [fetch_page_tags_SE(page_url, timeout) for page_url in page_urls]
     tag_groups = [
         extract_tags(first_page_html, first_page_url),
         *(tags for tags, _opt_error in page_results),
@@ -224,19 +226,19 @@ def fetch_paginated_tags(
     return deduplicate_tags(flatten_tag_groups(tag_groups)), errors
 
 
-def download_tags_from_url(url: str, timeout: float) -> tuple[list[Tag], list[str]]:
-    opt_first_page_html, opt_error = fetch_html_or_error(url, timeout)
+def download_tags_from_url_SE(url: str, timeout: float) -> tuple[list[Tag], Strs]:
+    opt_first_page_html, opt_error = fetch_html_or_error_SE(url, timeout)
     if opt_error:
         return [], [opt_error]
     if opt_first_page_html is None:
         return [], [f"{url}: empty response"]
-    return fetch_paginated_tags(opt_first_page_html, url, timeout)
+    return fetch_paginated_tags_SE(opt_first_page_html, url, timeout)
 
 
 def download_tags(base_url: str, timeout: float) -> list[Tag]:
-    errors: list[str] = []
+    errors: Strs = []
     for url in candidate_urls(base_url):
-        tags, url_errors = download_tags_from_url(url, timeout)
+        tags, url_errors = download_tags_from_url_SE(url, timeout)
         errors.extend(url_errors)
         if tags:
             return tags
@@ -248,7 +250,7 @@ def download_tags(base_url: str, timeout: float) -> list[Tag]:
     raise RuntimeError(message)
 
 
-def write_tags_csv(tags: Iterable[Tag], output_path: Path) -> None:
+def write_tags_csv_SE(tags: Iterable[Tag], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=("name", "slug", "url"))
@@ -257,7 +259,10 @@ def write_tags_csv(tags: Iterable[Tag], output_path: Path) -> None:
             writer.writerow({"name": tag.name, "slug": tag.slug, "url": tag.url})
 
 
-def parse_args(opt_argv: Optional[list[str]] = None) -> argparse.Namespace:
+write_tags_csv = write_tags_csv_SE
+
+
+def parse_args(opt_argv: Optional[Strs] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Download missav.ws movie tags into data/tags.csv."
     )
@@ -267,11 +272,11 @@ def parse_args(opt_argv: Optional[list[str]] = None) -> argparse.Namespace:
     return parser.parse_args(opt_argv)
 
 
-def main(opt_argv: Optional[list[str]] = None) -> int:
+def main_SE(opt_argv: Optional[Strs] = None) -> int:
     args = parse_args(opt_argv)
     try:
         tags = download_tags(args.base_url, args.timeout)
-        write_tags_csv(tags, args.output)
+        write_tags_csv_SE(tags, args.output)
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -281,4 +286,4 @@ def main(opt_argv: Optional[list[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main_SE())
