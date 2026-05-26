@@ -10,7 +10,7 @@ import sys
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Iterable, Iterator, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, unquote, urljoin, urlparse
 from urllib.request import Request, urlopen
@@ -42,11 +42,11 @@ class AnchorParser(HTMLParser):
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self._opt_href: str | None = None
+        self._opt_href: Optional[str] = None
         self._text_parts: list[str] = []
         self.anchors: list[tuple[str, str]] = []
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
         opt_href = dict(attrs).get("href") if tag.lower() == "a" else None
         if opt_href:
             self._opt_href = opt_href
@@ -64,7 +64,7 @@ class AnchorParser(HTMLParser):
             self._text_parts = []
 
 
-def decode_response(raw: bytes, opt_content_type: str | None) -> str:
+def decode_response(raw: bytes, opt_content_type: Optional[str]) -> str:
     charset = "utf-8"
     if opt_content_type:
         opt_match = re.search(r"charset=([\w.-]+)", opt_content_type, flags=re.IGNORECASE)
@@ -96,7 +96,7 @@ def normalize_name(text: str, slug: str) -> str:
     return unquote(slug).replace("-", " ").replace("_", " ").strip()
 
 
-def parse_tag_anchor(href: str, text: str, page_url: str) -> tuple[str, Tag] | None:
+def parse_tag_anchor(href: str, text: str, page_url: str) -> Optional[tuple[str, Tag]]:
     absolute_url = urljoin(page_url, href)
     parsed = urlparse(absolute_url)
     opt_match = TAG_PATH_RE.match(parsed.path)
@@ -131,7 +131,7 @@ def extract_tags(page_html: str, page_url: str) -> list[Tag]:
     return sorted(tags.values(), key=lambda tag: tag.name.casefold())
 
 
-def parse_genre_page_anchor(href: str, page_url: str) -> tuple[int, str] | None:
+def parse_genre_page_anchor(href: str, page_url: str) -> Optional[tuple[int, str]]:
     absolute_url = urljoin(page_url, href)
     parsed = urlparse(absolute_url)
     if not GENRE_PAGE_RE.match(parsed.path):
@@ -148,7 +148,7 @@ def parse_genre_page_anchor(href: str, page_url: str) -> tuple[int, str] | None:
     return opt_page_number, parsed._replace(fragment="").geturl()
 
 
-def parse_positive_int(value: str) -> int | None:
+def parse_positive_int(value: str) -> Optional[int]:
     try:
         number = int(value)
     except ValueError:
@@ -176,7 +176,7 @@ def candidate_urls(base_url: str, paths: Iterable[str] = DEFAULT_TAG_PAGES) -> l
     return [urljoin(base, path.lstrip("/")) for path in paths]
 
 
-def fetch_html_or_error(url: str, timeout: float) -> tuple[str | None, str | None]:
+def fetch_html_or_error(url: str, timeout: float) -> tuple[Optional[str], Optional[str]]:
     try:
         return fetch_html(url, timeout), None
     except (HTTPError, URLError, TimeoutError, OSError) as exc:
@@ -196,7 +196,7 @@ def deduplicate_tags(tags: Iterable[Tag]) -> list[Tag]:
     return sort_tags(keep_first_tag_by_slug(tag_items).values())
 
 
-def fetch_page_tags(page_url: str, timeout: float) -> tuple[list[Tag], str | None]:
+def fetch_page_tags(page_url: str, timeout: float) -> tuple[list[Tag], Optional[str]]:
     opt_html, opt_error = fetch_html_or_error(page_url, timeout)
     return (
         (extract_tags(opt_html, page_url), None)
@@ -205,7 +205,11 @@ def fetch_page_tags(page_url: str, timeout: float) -> tuple[list[Tag], str | Non
     )
 
 
-def fetch_paginated_tags(first_page_html: str, first_page_url: str, timeout: float) -> tuple[list[Tag], list[str]]:
+def fetch_paginated_tags(
+    first_page_html: str,
+    first_page_url: str,
+    timeout: float,
+) -> tuple[list[Tag], list[str]]:
     page_urls = [
         page_url
         for page_url in extract_genre_page_urls(first_page_html, first_page_url)
@@ -253,18 +257,18 @@ def write_tags_csv(tags: Iterable[Tag], output_path: Path) -> None:
             writer.writerow({"name": tag.name, "slug": tag.slug, "url": tag.url})
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+def parse_args(opt_argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Download missav.ws movie tags into data/tags.csv."
     )
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--timeout", type=float, default=20.0)
-    return parser.parse_args(argv)
+    return parser.parse_args(opt_argv)
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
+def main(opt_argv: Optional[list[str]] = None) -> int:
+    args = parse_args(opt_argv)
     try:
         tags = download_tags(args.base_url, args.timeout)
         write_tags_csv(tags, args.output)
