@@ -253,10 +253,12 @@ def download_tags(base_url: str, timeout: float) -> list[Tag]:
 def write_tags_csv_SE(tags: Iterable[Tag], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", newline="", encoding="utf-8") as file:
-        writer = csv.DictWriter(file, fieldnames=("name", "slug", "url"))
+        writer = csv.DictWriter(file, fieldnames=("id", "name", "slug", "url"))
         writer.writeheader()
-        for tag in tags:
-            writer.writerow({"name": tag.name, "slug": tag.slug, "url": tag.url})
+        writer.writerows(
+            {"id": index, "name": tag.name, "slug": tag.slug, "url": tag.url}
+            for index, tag in enumerate(tags, start=1)
+        )
 
 
 write_tags_csv = write_tags_csv_SE
