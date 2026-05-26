@@ -5,13 +5,12 @@ from __future__ import annotations
 import argparse
 import csv
 import html
-import http.client
 import re
 import sys
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import BinaryIO, Optional
+from typing import Optional
 from urllib.parse import unquote, urljoin, urlparse
 from urllib.request import Request, urlopen
 
@@ -22,7 +21,6 @@ from tagrank.app.download_tag import PROJECT_ROOT, decode_response
 from tagrank.base_adt import OptStr, Strs
 
 
-DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data" / "video_list"
 DEFAULT_PLAYLIST_OUTPUT_DIR = PROJECT_ROOT / "data" / "video_playlist_exports"
 DEFAULT_REFERER = "https://missav.ws/en/genres"
 DEFAULT_TIMEOUT = 20.0
@@ -187,15 +185,6 @@ def source_rank(source: VideoSource) -> int:
     return 0 if source.extension == ".mp4" else 1
 
 
-def select_video_source(sources: list[VideoSource]) -> Optional[VideoSource]:
-    return min(sources, key=source_rank) if sources else None
-
-
-def output_path_for_source(output_dir: Path, video_id: str, source: VideoSource) -> Path:
-    extension = ".ts" if source.extension == ".m3u8" else source.extension
-    return output_dir / f"{video_id}{extension}"
-
-
 def safe_filename(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_") or "video"
 
@@ -212,52 +201,8 @@ def playlist_segments_path(output_dir: Path, video_id: str, playlist: VideoPlayl
     return video_playlist_dir(output_dir, video_id) / f"{safe_filename(playlist.resolution)}.csv"
 
 
-def copy_response_SE(response, output_file: BinaryIO, chunk_size: int = 1024 * 1024) -> None:
-    opt_chunk = read_response_chunk(response, chunk_size)
-    while opt_chunk:
-        output_file.write(opt_chunk)
-        opt_chunk = read_response_chunk(response, chunk_size)
-
-
-def read_response_chunk(response, chunk_size: int) -> bytes:
-    try:
-        return response.read(chunk_size)
-    except http.client.IncompleteRead as exc:
-        return exc.partial
-
-
-def download_file_SE(source_url: str, output_path: Path, referer: str, timeout: float) -> Path:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open_url_SE(source_url, referer, timeout) as response:
-        with output_path.open("wb") as file:
-            copy_response_SE(response, file)
-    return output_path
-
-
-def temp_output_path(output_path: Path) -> Path:
-    return output_path.with_suffix(output_path.suffix + ".part")
-
-
 def retry_numbers(max_retries: int = MAX_RETRIES) -> range:
     return range(1, max_retries + 1)
-
-
-def download_segment_SE(
-    segment_url: str,
-    output_file: BinaryIO,
-    referer: str,
-    timeout: float,
-) -> None:
-    opt_error = None
-    for attempt in retry_numbers():
-        try:
-            with open_url_SE(segment_url, referer, timeout) as response:
-                copy_response_SE(response, output_file)
-            return
-        except Exception as exc:
-            opt_error = exc
-            print(f"segment retry {attempt}/{MAX_RETRIES}: {segment_url}, err:{exc}")
-    raise RuntimeError(f"segment failed after {MAX_RETRIES} attempts: {segment_url}, err:{opt_error}")
 
 
 def is_m3u8_segment(line: str) -> bool:
@@ -401,49 +346,15 @@ def export_video_playlists_SE(link: str, output_dir: Path, timeout: float) -> li
     ]
 
 
-def download_m3u8_SE(source_url: str, output_path: Path, referer: str, timeout: float) -> Path:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = temp_output_path(output_path)
-    m3u8_text, m3u8_url = leaf_m3u8_text_SE(source_url, referer, timeout)
-    segment_urls = parse_m3u8_segments(m3u8_text, m3u8_url)
-    with temp_path.open("wb") as file:
-        for segment_url in segment_urls:
-            download_segment_SE(segment_url, file, referer, timeout)
-    temp_path.replace(output_path)
-    return output_path
-
-
-def download_source_SE(source: VideoSource, output_path: Path, referer: str, timeout: float) -> Path:
-    return (
-        download_m3u8_SE(source.url, output_path, referer, timeout)
-        if source.extension == ".m3u8"
-        else download_file_SE(source.url, output_path, referer, timeout)
-    )
-
-
-def download_video_by_id_SE(link: str, output_dir: Path, timeout: float) -> Path:
-    page_html = fetch_text_with_retry_SE(link, DEFAULT_REFERER, timeout)
-    opt_source = select_video_source(extract_video_sources(page_html, link))
-    if opt_source is None:
-        raise RuntimeError(f"no video source found: {link}")
-    output_path = output_path_for_source(output_dir, video_id_from_link(link), opt_source)
-    return download_source_SE(opt_source, output_path, link, timeout)
-
-
 def main_SE(opt_argv: Optional[Strs] = None) -> int:
     args = parse_args(opt_argv)
     try:
-        if args.export_playlists:
-            output_dir = args.output_dir or DEFAULT_PLAYLIST_OUTPUT_DIR
-            output_paths = export_video_playlists_SE(args.link, output_dir, args.timeout)
-            print(f"saved {len(output_paths)} playlist files to {output_dir}")
-            return 0
-        output_dir = args.output_dir or DEFAULT_OUTPUT_DIR
-        output_path = download_video_by_id_SE(args.link, output_dir, args.timeout)
+        output_dir = args.output_dir or DEFAULT_PLAYLIST_OUTPUT_DIR
+        output_paths = export_video_playlists_SE(args.link, output_dir, args.timeout)
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    print(f"saved video to {output_path}")
+    print(f"saved {len(output_paths)} playlist files to {output_dir}")
     return 0
 
 

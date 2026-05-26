@@ -1,19 +1,14 @@
-from tagrank.app import download_video_by_id
-from tagrank.app.download_video_by_id import (
+from tagrank.app import export_video_segment_list
+from tagrank.app.export_video_segment_list import (
     VideoPlaylist,
     VideoSource,
-    download_segment_SE,
-    download_m3u8_SE,
-    download_video_by_id_SE,
     export_video_playlists_SE,
     extract_video_sources,
     fetch_text_with_retry_SE,
     leaf_m3u8_text_SE,
-    output_path_for_source,
     parse_m3u8_playlists,
     parse_m3u8_segments,
     parse_m3u8_variants,
-    select_video_source,
     video_id_from_link,
 )
 
@@ -51,18 +46,6 @@ def test_extract_video_sources_reads_packed_eval_script():
             extension=".m3u8",
         )
     ]
-
-
-def test_select_video_source_prefers_mp4():
-    sources = [
-        VideoSource(url="https://example.com/movie.m3u8", extension=".m3u8"),
-        VideoSource(url="https://example.com/movie.mp4", extension=".mp4"),
-    ]
-
-    assert select_video_source(sources) == VideoSource(
-        url="https://example.com/movie.mp4",
-        extension=".mp4",
-    )
 
 
 def test_parse_m3u8_segments_resolves_relative_urls():
@@ -124,7 +107,7 @@ def test_leaf_m3u8_text_reads_first_variant(monkeypatch):
             else "#EXTM3U\n#EXTINF:1,\nvideo0.jpeg\n"
         )
 
-    monkeypatch.setattr(download_video_by_id, "fetch_text_SE", fake_fetch_text_SE)
+    monkeypatch.setattr(export_video_segment_list, "fetch_text_SE", fake_fetch_text_SE)
 
     assert leaf_m3u8_text_SE("https://cdn.example.com/playlist.m3u8", "referer", 10) == (
         "#EXTM3U\n#EXTINF:1,\nvideo0.jpeg\n",
@@ -136,14 +119,6 @@ def test_leaf_m3u8_text_reads_first_variant(monkeypatch):
     ]
 
 
-def test_output_path_for_source_uses_video_id_and_extension(tmp_path):
-    assert output_path_for_source(
-        tmp_path,
-        "hhkl-240",
-        VideoSource(url="https://example.com/movie.m3u8", extension=".m3u8"),
-    ) == tmp_path / "hhkl-240.ts"
-
-
 def test_fetch_text_with_retry_retries_until_success(monkeypatch):
     attempts = []
 
@@ -153,7 +128,7 @@ def test_fetch_text_with_retry_retries_until_success(monkeypatch):
             raise OSError("eof")
         return "ok"
 
-    monkeypatch.setattr(download_video_by_id, "fetch_text_SE", fake_fetch_text_SE)
+    monkeypatch.setattr(export_video_segment_list, "fetch_text_SE", fake_fetch_text_SE)
 
     assert fetch_text_with_retry_SE("https://example.com", "referer", 10) == "ok"
     assert attempts == [
@@ -161,111 +136,6 @@ def test_fetch_text_with_retry_retries_until_success(monkeypatch):
         ("https://example.com", "referer", 10),
         ("https://example.com", "referer", 10),
     ]
-
-
-def test_download_video_by_id_downloads_selected_source(monkeypatch, tmp_path):
-    calls = []
-
-    def fake_fetch_text_SE(url, referer, timeout):
-        calls.append(("fetch", url, referer, timeout))
-        return '<source src="https://cdn.example.com/movie.mp4">'
-
-    def fake_download_source_SE(source, output_path, referer, timeout):
-        calls.append(("download", source, output_path, referer, timeout))
-        return output_path
-
-    monkeypatch.setattr(download_video_by_id, "fetch_text_SE", fake_fetch_text_SE)
-    monkeypatch.setattr(download_video_by_id, "download_source_SE", fake_download_source_SE)
-
-    assert download_video_by_id_SE(
-        "https://example.com/en/hhkl-240",
-        tmp_path,
-        10,
-    ) == tmp_path / "hhkl-240.mp4"
-    assert calls == [
-        ("fetch", "https://example.com/en/hhkl-240", "https://missav.ws/en/genres", 10),
-        (
-            "download",
-            VideoSource(url="https://cdn.example.com/movie.mp4", extension=".mp4"),
-            tmp_path / "hhkl-240.mp4",
-            "https://example.com/en/hhkl-240",
-            10,
-        ),
-    ]
-
-
-def test_download_m3u8_uses_page_referer_for_segments(monkeypatch, tmp_path):
-    calls = []
-
-    class FakeResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, _exc_type, _exc, _traceback):
-            return None
-
-        def read(self, _chunk_size):
-            return b""
-
-    def fake_leaf_m3u8_text_SE(source_url, referer, timeout):
-        calls.append(("leaf", source_url, referer, timeout))
-        return "#EXTM3U\n#EXTINF:1,\nvideo0.jpeg\n", source_url
-
-    def fake_open_url_SE(url, referer, timeout):
-        calls.append(("segment", url, referer, timeout))
-        return FakeResponse()
-
-    monkeypatch.setattr(download_video_by_id, "leaf_m3u8_text_SE", fake_leaf_m3u8_text_SE)
-    monkeypatch.setattr(download_video_by_id, "open_url_SE", fake_open_url_SE)
-
-    assert download_m3u8_SE(
-        "https://cdn.example.com/video.m3u8",
-        tmp_path / "out.ts",
-        "https://example.com/en/hhkl-240",
-        10,
-    ) == tmp_path / "out.ts"
-    assert calls == [
-        ("leaf", "https://cdn.example.com/video.m3u8", "https://example.com/en/hhkl-240", 10),
-        (
-            "segment",
-            "https://cdn.example.com/video0.jpeg",
-            "https://example.com/en/hhkl-240",
-            10,
-        ),
-    ]
-
-
-def test_download_segment_retries_until_success(monkeypatch, tmp_path):
-    attempts = []
-
-    class FakeResponse:
-        def __init__(self):
-            self.reads = 0
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, _exc_type, _exc, _traceback):
-            return None
-
-        def read(self, _chunk_size):
-            self.reads += 1
-            return b"ok" if self.reads == 1 else b""
-
-    def fake_open_url_SE(url, referer, timeout):
-        attempts.append(len(attempts) + 1)
-        if len(attempts) < 3:
-            raise OSError("closed")
-        return FakeResponse()
-
-    monkeypatch.setattr(download_video_by_id, "open_url_SE", fake_open_url_SE)
-
-    output_path = tmp_path / "segment.bin"
-    with output_path.open("wb") as file:
-        download_segment_SE("https://cdn.example.com/video0.jpeg", file, "referer", 10)
-
-    assert attempts == [1, 2, 3]
-    assert output_path.read_bytes() == b"ok"
 
 
 def test_export_video_playlists_writes_url_and_segments(monkeypatch, tmp_path):
@@ -297,7 +167,7 @@ def test_export_video_playlists_writes_url_and_segments(monkeypatch, tmp_path):
         return leaf_m3u8
 
     monkeypatch.setattr(
-        download_video_by_id,
+        export_video_segment_list,
         "fetch_text_with_retry_SE",
         fake_fetch_text_with_retry_SE,
     )
@@ -346,7 +216,7 @@ def test_export_video_playlists_deduplicates_direct_variant_sources(monkeypatch,
         return leaf_m3u8
 
     monkeypatch.setattr(
-        download_video_by_id,
+        export_video_segment_list,
         "fetch_text_with_retry_SE",
         fake_fetch_text_with_retry_SE,
     )
