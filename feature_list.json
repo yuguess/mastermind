@@ -16,6 +16,14 @@
       "status": "implemented",
       "evidence": "运行tagrank/app/download_tag_list.py --tag-ids 1,2,3 --page-index 1 --pages 10, 会从page_index开始下载pages页, 每下载5页就用视频code作为id增量写入CSV",
       "testedAt": "2026-05-26T09:30:00Z"
+    },
+    {
+      "id": "download_video_by_id",
+      "name": "通过页面下载对应视频",
+      "description": "从命令行参数读入视频地址, 将下载的视频放在命令行参数指定的目录下, 默认存储路径为data/video_list",
+      "status": "implemented",
+      "evidence": "运行tagrank/app/download_video_by_id.py --link https://missav.ws/en/hhkl-240 --export-playlists, 会输出到data/video_playlist_exports/{video_id}/, 按分辨率保存m3u8地址文件和包含referer的分片CSV",
+      "testedAt": "2026-05-26T11:20:00Z"
     }
   ]
 }

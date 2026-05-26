@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import html
 import http.client
 import re
@@ -22,6 +23,7 @@ from tagrank.base_adt import OptStr, Strs
 
 
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data" / "video_list"
+DEFAULT_PLAYLIST_OUTPUT_DIR = PROJECT_ROOT / "data" / "video_playlist_exports"
 DEFAULT_REFERER = "https://missav.ws/en/genres"
 DEFAULT_TIMEOUT = 20.0
 MAX_RETRIES = 3
@@ -43,6 +45,12 @@ class VideoSource:
     extension: str
 
 
+@dataclass(frozen=True, slots=True)
+class VideoPlaylist:
+    resolution: str
+    url: str
+
+
 class SourceParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -61,8 +69,9 @@ class SourceParser(HTMLParser):
 def parse_args(opt_argv: Optional[Strs] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--link", required=True)
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
+    parser.add_argument("--export-playlists", action="store_true")
     return parser.parse_args(opt_argv)
 
 
@@ -187,6 +196,22 @@ def output_path_for_source(output_dir: Path, video_id: str, source: VideoSource)
     return output_dir / f"{video_id}{extension}"
 
 
+def safe_filename(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_") or "video"
+
+
+def video_playlist_dir(output_dir: Path, video_id: str) -> Path:
+    return output_dir / safe_filename(video_id)
+
+
+def playlist_url_path(output_dir: Path, video_id: str, playlist: VideoPlaylist) -> Path:
+    return video_playlist_dir(output_dir, video_id) / f"{safe_filename(playlist.resolution)}.m3u8.txt"
+
+
+def playlist_segments_path(output_dir: Path, video_id: str, playlist: VideoPlaylist) -> Path:
+    return video_playlist_dir(output_dir, video_id) / f"{safe_filename(playlist.resolution)}.csv"
+
+
 def copy_response_SE(response, output_file: BinaryIO, chunk_size: int = 1024 * 1024) -> None:
     opt_chunk = read_response_chunk(response, chunk_size)
     while opt_chunk:
@@ -257,6 +282,43 @@ def parse_m3u8_variants(m3u8_text: str, m3u8_url: str) -> Strs:
     return [urljoin(m3u8_url, line) for line in lines if is_m3u8_variant(line)]
 
 
+def resolution_from_stream_inf(line: str) -> str:
+    opt_match = re.search(r"RESOLUTION=(\d+x\d+)", line, flags=re.IGNORECASE)
+    return opt_match.group(1) if opt_match else "unknown"
+
+
+def resolution_label(value: str) -> str:
+    opt_match = re.fullmatch(r"\d+x(\d+)", value)
+    return f"{opt_match.group(1)}p" if opt_match else value
+
+
+def resolution_from_playlist_url(url: str) -> str:
+    path_parts = [part for part in urlparse(url).path.split("/") if part]
+    opt_resolution = next(
+        (part for part in reversed(path_parts) if re.fullmatch(r"\d+p", part)),
+        None,
+    )
+    return opt_resolution or "source"
+
+
+def parse_m3u8_playlists(m3u8_text: str, m3u8_url: str) -> list[VideoPlaylist]:
+    lines = [line.strip() for line in m3u8_text.splitlines()]
+    playlists: list[VideoPlaylist] = []
+    opt_resolution: OptStr = None
+    for line in lines:
+        if line.startswith("#EXT-X-STREAM-INF"):
+            opt_resolution = resolution_label(resolution_from_stream_inf(line))
+        elif is_m3u8_variant(line):
+            playlists.append(
+                VideoPlaylist(
+                    resolution=opt_resolution or "unknown",
+                    url=urljoin(m3u8_url, line),
+                )
+            )
+            opt_resolution = None
+    return playlists
+
+
 def leaf_m3u8_text_SE(source_url: str, referer: str, timeout: float) -> tuple[str, str]:
     m3u8_text = fetch_text_with_retry_SE(source_url, referer, timeout)
     variant_urls = parse_m3u8_variants(m3u8_text, source_url)
@@ -264,6 +326,79 @@ def leaf_m3u8_text_SE(source_url: str, referer: str, timeout: float) -> tuple[st
         return m3u8_text, source_url
     variant_url = variant_urls[0]
     return fetch_text_with_retry_SE(variant_url, referer, timeout), variant_url
+
+
+def source_playlists_SE(source: VideoSource, referer: str, timeout: float) -> list[VideoPlaylist]:
+    if source.extension != ".m3u8":
+        return [VideoPlaylist(resolution="file", url=source.url)]
+    m3u8_text = fetch_text_with_retry_SE(source.url, referer, timeout)
+    playlists = parse_m3u8_playlists(m3u8_text, source.url)
+    return playlists if playlists else [VideoPlaylist(resolution=resolution_from_playlist_url(source.url), url=source.url)]
+
+
+def unique_playlists(playlists: list[VideoPlaylist]) -> list[VideoPlaylist]:
+    playlist_map = {playlist.url: playlist for playlist in reversed(playlists)}
+    return list(reversed(playlist_map.values()))
+
+
+def playlist_segment_rows_SE(playlist: VideoPlaylist, referer: str, timeout: float) -> list[dict[str, str]]:
+    m3u8_text = fetch_text_with_retry_SE(playlist.url, referer, timeout)
+    segments = parse_m3u8_segments(m3u8_text, playlist.url)
+    return [
+        {
+            "index": str(index),
+            "resolution": playlist.resolution,
+            "referer": referer,
+            "segment_url": segment_url,
+        }
+        for index, segment_url in enumerate(segments)
+    ]
+
+
+def write_playlist_url_SE(output_dir: Path, video_id: str, playlist: VideoPlaylist) -> Path:
+    output_path = playlist_url_path(output_dir, video_id, playlist)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(playlist.url + "\n", encoding="utf-8")
+    return output_path
+
+
+def write_playlist_segments_csv_SE(
+    output_dir: Path,
+    video_id: str,
+    playlist: VideoPlaylist,
+    rows: list[dict[str, str]],
+) -> Path:
+    output_path = playlist_segments_path(output_dir, video_id, playlist)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=("index", "resolution", "referer", "segment_url"))
+        writer.writeheader()
+        writer.writerows(rows)
+    return output_path
+
+
+def export_video_playlists_SE(link: str, output_dir: Path, timeout: float) -> list[Path]:
+    page_html = fetch_text_with_retry_SE(link, DEFAULT_REFERER, timeout)
+    video_id = video_id_from_link(link)
+    sources = extract_video_sources(page_html, link)
+    playlists = unique_playlists([
+        playlist
+        for source in sources
+        for playlist in source_playlists_SE(source, link, timeout)
+    ])
+    return [
+        output_path
+        for playlist in playlists
+        for output_path in [
+            write_playlist_url_SE(output_dir, video_id, playlist),
+            write_playlist_segments_csv_SE(
+                output_dir,
+                video_id,
+                playlist,
+                playlist_segment_rows_SE(playlist, link, timeout),
+            ),
+        ]
+    ]
 
 
 def download_m3u8_SE(source_url: str, output_path: Path, referer: str, timeout: float) -> Path:
@@ -298,7 +433,13 @@ def download_video_by_id_SE(link: str, output_dir: Path, timeout: float) -> Path
 def main_SE(opt_argv: Optional[Strs] = None) -> int:
     args = parse_args(opt_argv)
     try:
-        output_path = download_video_by_id_SE(args.link, args.output_dir, args.timeout)
+        if args.export_playlists:
+            output_dir = args.output_dir or DEFAULT_PLAYLIST_OUTPUT_DIR
+            output_paths = export_video_playlists_SE(args.link, output_dir, args.timeout)
+            print(f"saved {len(output_paths)} playlist files to {output_dir}")
+            return 0
+        output_dir = args.output_dir or DEFAULT_OUTPUT_DIR
+        output_path = download_video_by_id_SE(args.link, output_dir, args.timeout)
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
