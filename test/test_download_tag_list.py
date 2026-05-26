@@ -2,11 +2,13 @@ from tagrank.app import download_tag_list
 from tagrank.app.download_tag_list import (
     TagSource,
     VideoLink,
+    download_tag_batches_SE,
     extract_videos,
     fetch_page_html_with_retry_SE,
     fetch_tag_videos_SE,
     merge_incremental_videos,
     page_url,
+    page_batches,
     page_numbers,
     parse_tag_ids,
     safe_filename,
@@ -25,6 +27,14 @@ def test_page_url_adds_page_query():
 
 def test_page_numbers_starts_at_page_index():
     assert list(page_numbers(3, 2)) == [3, 4]
+
+
+def test_page_batches_groups_every_five_pages():
+    assert [list(batch) for batch in page_batches(3, 12)] == [
+        [3, 4, 5, 6, 7],
+        [8, 9, 10, 11, 12],
+        [13, 14],
+    ]
 
 
 def test_extract_videos_deduplicates_video_links():
@@ -117,7 +127,7 @@ def test_fetch_page_html_with_retry_retries_until_success(monkeypatch):
         None,
     )
     assert attempts == ["https://example.com"] * 3
-    assert sleeps == [1, 1]
+    assert sleeps == [1, 2]
 
 
 def test_merge_incremental_videos_uses_code_as_id():
@@ -207,3 +217,44 @@ def test_fetch_tag_videos_starts_at_page_index(monkeypatch):
         ("https://example.com/a", 3),
         ("https://example.com/a", 4),
     ]
+
+
+def test_download_tag_batches_writes_every_five_pages(monkeypatch, tmp_path):
+    calls = []
+    writes = []
+    tag = TagSource(id=1, name="A", url="https://example.com/a")
+
+    def fake_fetch_pages_videos_SE(current_tag, pages):
+        calls.append((current_tag, list(pages)))
+        return [
+            VideoLink(
+                url=f"https://example.com/video-{len(calls)}",
+                code=f"code-{len(calls)}",
+                title="",
+                image_description="",
+                duration="",
+            )
+        ]
+
+    def fake_write_video_csv_SE(output_dir, current_tag, videos):
+        writes.append((output_dir, current_tag, videos))
+        return output_dir / "A.csv"
+
+    monkeypatch.setattr(
+        download_tag_list,
+        "fetch_pages_videos_SE",
+        fake_fetch_pages_videos_SE,
+    )
+    monkeypatch.setattr(
+        download_tag_list,
+        "write_video_csv_SE",
+        fake_write_video_csv_SE,
+    )
+
+    assert download_tag_batches_SE(tmp_path, tag, 3, 12) == tmp_path / "A.csv"
+    assert [pages for _current_tag, pages in calls] == [
+        [3, 4, 5, 6, 7],
+        [8, 9, 10, 11, 12],
+        [13, 14],
+    ]
+    assert len(writes) == 3

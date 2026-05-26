@@ -28,6 +28,7 @@ DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data" / "tag_list"
 DEFAULT_REFERER = "https://missav.ws/en/genres"
 DEFAULT_PAGE_INDEX = 1
 DEFAULT_PAGES = 2
+WRITE_BATCH_PAGES = 5
 MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 3
 VIDEO_PATH_RE = re.compile(r"^/(?:dm\d+/)?en/[\w.-]+$", re.IGNORECASE)
@@ -235,9 +236,10 @@ def fetch_page_html_with_retry_SE(
         opt_html, opt_error = fetch_page_html_once_SE(url)
         if opt_html is not None:
             return opt_html, None
-        print(f"retry {attempt}/{max_retries}: {url}, err:{opt_error}")
+        rtry_aft_sec = attempt * delay_seconds
+        print(f"retry {attempt}/{max_retries} aft {rtry_aft_sec}s: {url}, err:{opt_error}")
         if not is_last_attempt(attempt, max_retries):
-            retry_delay_SE(delay_seconds)
+            retry_delay_SE(rtry_aft_sec)
     return opt_html, opt_error
 
 
@@ -254,6 +256,14 @@ def page_numbers(page_index: int, pages: int) -> range:
     return range(page_index, page_index + pages)
 
 
+def page_batches(page_index: int, pages: int, batch_size: int = WRITE_BATCH_PAGES) -> list[range]:
+    starts = range(page_index, page_index + pages, batch_size)
+    return [
+        range(start, min(start + batch_size, page_index + pages))
+        for start in starts
+    ]
+
+
 def fetch_tag_videos_SE(tag: TagSource, page_index: int, pages: int) -> list[VideoLink]:
     videos = [
         video
@@ -264,6 +274,29 @@ def fetch_tag_videos_SE(tag: TagSource, page_index: int, pages: int) -> list[Vid
         for video in page_videos
     ]
     return deduplicate_videos(videos)
+
+
+def fetch_pages_videos_SE(tag: TagSource, pages: range) -> list[VideoLink]:
+    videos = [
+        video
+        for page_videos in map(lambda page: fetch_page_videos_SE(tag.url, page), pages)
+        for video in page_videos
+    ]
+    return deduplicate_videos(videos)
+
+
+def download_tag_batches_SE(
+    output_dir: Path,
+    tag: TagSource,
+    page_index: int,
+    pages: int,
+) -> Path:
+    output_path = output_dir / f"{safe_filename(tag.name)}.csv"
+    [
+        write_video_csv_SE(output_dir, tag, fetch_pages_videos_SE(tag, batch))
+        for batch in page_batches(page_index, pages)
+    ]
+    return output_path
 
 
 def safe_filename(name: str) -> str:
@@ -352,8 +385,10 @@ def download_tag_list_SE(
     pages: int,
 ) -> list[Path]:
     tags = read_tag_sources_SE(input_path, tag_ids)
-    rows = [(tag, fetch_tag_videos_SE(tag, page_index, pages)) for tag in tags]
-    return [write_video_csv_SE(output_dir, tag, videos) for tag, videos in rows]
+    return [
+        download_tag_batches_SE(output_dir, tag, page_index, pages)
+        for tag in tags
+    ]
 
 
 def main_SE(opt_argv: Optional[Strs] = None) -> int:
