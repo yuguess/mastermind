@@ -20,10 +20,10 @@
     {
       "id": "export_video_segment_list",
       "name": "通过页面导出视频分片列表",
-      "description": "从命令行参数读入视频地址, 将视频的不同分辨率playlist和分片地址导出到data/video_playlist_exports目录",
+      "description": "从命令行参数读入视频id, 将视频的不同分辨率playlist和分片地址导出到data/video_playlist_exports目录",
       "status": "implemented",
-      "evidence": "运行tagrank/app/export_video_segment_list.py --link https://missav.ws/en/hhkl-240, 会输出到data/video_playlist_exports/{video_id}/, 按分辨率保存m3u8地址文件和包含referer的分片CSV",
-      "testedAt": "2026-05-26T11:20:00Z"
+      "evidence": "运行tagrank/app/export_video_segment_list.py --video-id hhkl-240, 会输出到data/video_playlist_exports/{video_id}/, 按分辨率保存m3u8地址文件和包含referer的分片CSV",
+      "testedAt": "2026-05-27T00:10:00Z"
     },
     {
       "id": "download_video_parts",

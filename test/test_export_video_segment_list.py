@@ -9,12 +9,24 @@ from tagrank.app.export_video_segment_list import (
     parse_m3u8_playlists,
     parse_m3u8_segments,
     parse_m3u8_variants,
+    parse_args,
+    video_link_from_id,
     video_id_from_link,
 )
 
 
 def test_video_id_from_link_uses_last_path_part():
     assert video_id_from_link("https://example.com/en/hhkl-240") == "hhkl-240"
+
+
+def test_video_link_from_id_builds_default_page_url():
+    assert video_link_from_id("hhkl-240") == "https://missav.ws/en/hhkl-240"
+
+
+def test_parse_args_uses_video_id_not_link():
+    args = parse_args(["--video-id", "hhkl-240"])
+
+    assert args.video_id == "hhkl-240"
 
 
 def test_extract_video_sources_reads_script_and_source_attrs():

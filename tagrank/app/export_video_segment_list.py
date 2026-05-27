@@ -23,6 +23,7 @@ from tagrank.base_adt import OptStr, Strs
 
 DEFAULT_PLAYLIST_OUTPUT_DIR = PROJECT_ROOT / "data" / "video_playlist_exports"
 DEFAULT_REFERER = "https://missav.ws/en/genres"
+DEFAULT_VIDEO_BASE_URL = "https://missav.ws/en/"
 DEFAULT_TIMEOUT = 20.0
 MAX_RETRIES = 3
 VIDEO_SOURCE_RE = re.compile(
@@ -66,10 +67,9 @@ class SourceParser(HTMLParser):
 
 def parse_args(opt_argv: Optional[Strs] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--link", required=True)
+    parser.add_argument("--video-id", required=True)
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
-    parser.add_argument("--export-playlists", action="store_true")
     return parser.parse_args(opt_argv)
 
 
@@ -111,6 +111,10 @@ def video_id_from_link(link: str) -> str:
     parsed = urlparse(link)
     slug = unquote(parsed.path.rstrip("/").split("/")[-1])
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", slug).strip("_") or "video"
+
+
+def video_link_from_id(video_id: str) -> str:
+    return urljoin(DEFAULT_VIDEO_BASE_URL, safe_filename(video_id))
 
 
 def normalize_source_url(page_url: str, source_url: str) -> str:
@@ -350,7 +354,7 @@ def main_SE(opt_argv: Optional[Strs] = None) -> int:
     args = parse_args(opt_argv)
     try:
         output_dir = args.output_dir or DEFAULT_PLAYLIST_OUTPUT_DIR
-        output_paths = export_video_playlists_SE(args.link, output_dir, args.timeout)
+        output_paths = export_video_playlists_SE(video_link_from_id(args.video_id), output_dir, args.timeout)
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
