@@ -92,19 +92,24 @@ def fetch_text_SE(url: str, referer: str, timeout: float) -> str:
 
 
 def fetch_text_with_retry_SE(url: str, referer: str, timeout: float) -> str:
-    opt_error = None
-    for attempt in retry_numbers():
-        try:
-            return fetch_text_SE(url, referer, timeout)
-        except Exception as exc:
-            opt_error = exc
-            print(f"text retry {attempt}/{MAX_RETRIES}: {url}, err:{exc}")
-    raise RuntimeError(f"text request failed after {MAX_RETRIES} attempts: {url}, err:{opt_error}")
+    return fetch_text_with_retry_at_SE(url, referer, timeout, 1, None)
 
 
-def open_url_SE(url: str, referer: str, timeout: float):
-    request = Request(url, headers=request_headers(referer))
-    return urlopen(request, timeout=timeout)
+def fetch_text_with_retry_at_SE(
+    url: str,
+    referer: str,
+    timeout: float,
+    attempt: int,
+    opt_error: Optional[Exception],
+) -> str:
+    if attempt > MAX_RETRIES:
+        raise RuntimeError(f"text request failed after {MAX_RETRIES} attempts: {url}, err:{opt_error}")
+    try:
+        text = fetch_text_SE(url, referer, timeout)
+    except Exception as exc:
+        print(f"text retry {attempt}/{MAX_RETRIES}: {url}, err:{exc}")
+        text = fetch_text_with_retry_at_SE(url, referer, timeout, attempt + 1, exc)
+    return text
 
 
 def video_id_from_link(link: str) -> str:
@@ -160,15 +165,15 @@ def unpack_packed_match(match: re.Match[str]) -> str:
     base = int(match.group("a"))
     count = int(match.group("c"))
     words = match.group("k").split("|")
-    decoded = payload
     replacements = [
         (packer_token(index, base), words[index])
         for index in range(count - 1, -1, -1)
         if index < len(words) and words[index]
     ]
+    decoded_values = [payload]
     for token, word in replacements:
-        decoded = re.sub(r"\b" + re.escape(token) + r"\b", word, decoded)
-    return decoded
+        decoded_values.append(re.sub(r"\b" + re.escape(token) + r"\b", word, decoded_values[-1]))
+    return decoded_values[-1]
 
 
 def unpack_packed_scripts(page_html: str) -> str:
@@ -183,10 +188,6 @@ def unique_sources(sources: list[VideoSource]) -> list[VideoSource]:
 
 def extract_video_sources(page_html: str, page_url: str) -> list[VideoSource]:
     return unique_sources([*parse_attr_sources(page_html, page_url), *parse_text_sources(page_html, page_url)])
-
-
-def source_rank(source: VideoSource) -> int:
-    return 0 if source.extension == ".mp4" else 1
 
 
 def safe_filename(value: str) -> str:
@@ -271,18 +272,26 @@ def parse_m3u8_playlists(m3u8_text: str, m3u8_url: str) -> list[VideoPlaylist]:
 def leaf_m3u8_text_SE(source_url: str, referer: str, timeout: float) -> tuple[str, str]:
     m3u8_text = fetch_text_with_retry_SE(source_url, referer, timeout)
     variant_urls = parse_m3u8_variants(m3u8_text, source_url)
-    if not variant_urls:
-        return m3u8_text, source_url
-    variant_url = variant_urls[0]
-    return fetch_text_with_retry_SE(variant_url, referer, timeout), variant_url
+    opt_variant_url = variant_urls[0] if variant_urls else None
+    return (
+        (fetch_text_with_retry_SE(opt_variant_url, referer, timeout), opt_variant_url)
+        if opt_variant_url is not None
+        else (m3u8_text, source_url)
+    )
 
 
 def source_playlists_SE(source: VideoSource, referer: str, timeout: float) -> list[VideoPlaylist]:
-    if source.extension != ".m3u8":
-        return [VideoPlaylist(resolution="file", url=source.url)]
+    return (
+        source_m3u8_playlists_SE(source, referer, timeout)
+        if source.extension == ".m3u8"
+        else [VideoPlaylist(resolution="file", url=source.url)]
+    )
+
+
+def source_m3u8_playlists_SE(source: VideoSource, referer: str, timeout: float) -> list[VideoPlaylist]:
     m3u8_text = fetch_text_with_retry_SE(source.url, referer, timeout)
     playlists = parse_m3u8_playlists(m3u8_text, source.url)
-    return playlists if playlists else [VideoPlaylist(resolution=resolution_from_playlist_url(source.url), url=source.url)]
+    return playlists or [VideoPlaylist(resolution=resolution_from_playlist_url(source.url), url=source.url)]
 
 
 def unique_playlists(playlists: list[VideoPlaylist]) -> list[VideoPlaylist]:
