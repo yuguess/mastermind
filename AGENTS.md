@@ -25,12 +25,12 @@
 - 所有带网络请求的函数都要处理网络慢或者网络不存在的情况, 并加上重试的逻辑
 
 ## 代码目录结构
-
-- test放测试文件 
-- script放脚本 
-- config放配置文件 
-- data目录放数据 
-- draft目录放示例, 执行一次的脚本代码 
-- doc, 放文档 
+- research, 研究文件, 用来存放对某个功能或者话题的研究
 - plan, 放规划文件 
-- requirements.txt记录这个项目的依赖库
+- test, 放测试文件
+- script, 放脚本 
+- config, 放配置文件 
+- data, 放数据 
+- draft, 放示例, 执行一次的脚本代码 
+- doc, 放和代码有关的文档
+- requirements.txt, 记录这个项目的依赖库
